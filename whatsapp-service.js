@@ -162,7 +162,7 @@ app.post('/send-invoice', upload.single('invoicePdf'), async (req, res) => {
 
   const jid = toJid(phoneNumber);
   const fileName = `Invoice_${invoiceNumber || 'bill'}.pdf`;
-  const caption = `Hi ${customerName || 'there'}, here's your invoice #${invoiceNumber || ''}. Thank you for your purchase!`;
+  const caption = `Hi Customer, here's your invoice #${invoiceNumber || ''}. Thank you for your purchase!.Shop again at GripStyle.`;
 
   try {
     const [check] = await sock.onWhatsApp(jid);
