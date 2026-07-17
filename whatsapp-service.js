@@ -25,43 +25,59 @@ const AUTH_FOLDER = 'auth_info';
 let sock = null;
 let latestQr = null;
 let isReady = false;
+let isStarting = false;
 
 async function startSock() {
-  const { state, saveCreds } = await useMultiFileAuthState(AUTH_FOLDER);
-  const { version } = await fetchLatestBaileysVersion();
+  if (isStarting) {
+    console.log('startSock() already in progress — skipping duplicate call');
+    return;
+  }
+  isStarting = true;
+  try {
+    const { state, saveCreds } = await useMultiFileAuthState(AUTH_FOLDER);
+    const { version } = await fetchLatestBaileysVersion();
+    console.log('Using Baileys/WA version:', version);
 
-  sock = makeWASocket({
-    auth: state,
-    version,
-    logger: pino({ level: 'silent' }),
-    printQRInTerminal: false
-  });
+    sock = makeWASocket({
+      auth: state,
+      version,
+      logger: pino({ level: 'silent' }),
+      printQRInTerminal: false
+    });
 
-  sock.ev.on('creds.update', saveCreds);
+    sock.ev.on('creds.update', saveCreds);
 
-  sock.ev.on('connection.update', async (update) => {
-    const { connection, lastDisconnect, qr } = update;
+    sock.ev.on('connection.update', async (update) => {
+      const { connection, lastDisconnect, qr } = update;
 
-    if (qr) {
-      latestQr = await qrcode.toDataURL(qr);
-      isReady = false;
-      console.log('New QR generated — waiting for scan via UI');
-    }
+      if (qr) {
+        latestQr = await qrcode.toDataURL(qr);
+        isReady = false;
+        console.log('New QR generated — waiting for scan via UI');
+      }
 
-    if (connection === 'open') {
-      isReady = true;
-      latestQr = null;
-      console.log('✅ WhatsApp connected');
-    }
+      if (connection === 'open') {
+        isReady = true;
+        latestQr = null;
+        console.log('✅ WhatsApp connected');
+      }
 
-    if (connection === 'close') {
-      isReady = false;
-      const statusCode = lastDisconnect?.error?.output?.statusCode;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-      console.log('Connection closed. Status code:', statusCode, 'Reconnecting:', shouldReconnect);
-      if (shouldReconnect) startSock();
-    }
-  });
+      if (connection === 'close') {
+        isReady = false;
+        const statusCode = lastDisconnect?.error?.output?.statusCode;
+        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+        console.log('Connection closed. Status code:', statusCode, 'Reconnecting:', shouldReconnect);
+        isStarting = false;
+        if (shouldReconnect) startSock();
+      }
+    });
+  } catch (err) {
+    console.error('startSock() failed:', err);
+    isStarting = false;
+  } finally {
+    // Safety net in case no connection.update event ever fires to reset the flag.
+    setTimeout(() => { isStarting = false; }, 30000);
+  }
 }
 
 startSock();
@@ -80,6 +96,7 @@ app.get('/qr-status', (req, res) => {
   res.json({ ready: isReady, qr: isReady ? null : latestQr });
 });
 
+// ── Disconnect WhatsApp and remove the local auth_info folder ──
 app.post('/logout', async (req, res) => {
   try {
     try {
@@ -91,13 +108,16 @@ app.post('/logout', async (req, res) => {
     }
     isReady = false;
 
-    // Without this, the old (now-invalid) creds stay on disk and Baileys tries
-    // to reconnect with them instead of generating a fresh QR code.
+    // Remove the auth_info folder from disk so old/invalid creds can't be reused —
+    // without this, Baileys tries to reconnect with stale creds instead of
+    // generating a fresh QR code.
     await fs.promises.rm(AUTH_FOLDER, { recursive: true, force: true });
+    console.log('auth_info folder removed');
 
-    res.json({ success: true, message: 'WhatsApp disconnected. Scan a new QR code to reconnect.' });
+    res.json({ success: true, message: 'WhatsApp disconnected and auth_info removed. Scan a new QR code to reconnect.' });
     startSock();
   } catch (err) {
+    console.error('Logout failed:', err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
