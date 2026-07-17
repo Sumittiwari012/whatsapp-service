@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
+const fs = require('fs');
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -19,13 +20,14 @@ app.use(express.json());
 const upload = multer({ storage: multer.memoryStorage() });
 
 const PORT = process.env.PORT || 4001;
+const AUTH_FOLDER = 'auth_info';
 
 let sock = null;
 let latestQr = null;
 let isReady = false;
 
 async function startSock() {
-  const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+  const { state, saveCreds } = await useMultiFileAuthState(AUTH_FOLDER);
   const { version } = await fetchLatestBaileysVersion();
 
   sock = makeWASocket({
@@ -80,11 +82,20 @@ app.get('/qr-status', (req, res) => {
 
 app.post('/logout', async (req, res) => {
   try {
-    await sock.logout();
+    try {
+      await sock.logout();
+    } catch (logoutErr) {
+      // logout() can throw if the socket is already in a bad state — that's fine,
+      // we still want to clear local creds and restart below.
+      console.warn('sock.logout() error (continuing anyway):', logoutErr.message);
+    }
     isReady = false;
+
+    // Without this, the old (now-invalid) creds stay on disk and Baileys tries
+    // to reconnect with them instead of generating a fresh QR code.
+    await fs.promises.rm(AUTH_FOLDER, { recursive: true, force: true });
+
     res.json({ success: true, message: 'WhatsApp disconnected. Scan a new QR code to reconnect.' });
-    // Restart the socket so a fresh QR is generated for the next connection —
-    // without this, logout() leaves the service with no way to reconnect.
     startSock();
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
