@@ -183,7 +183,41 @@ app.post('/send-invoice', upload.single('invoicePdf'), async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 });
+// Add this to the WhatsApp (Baileys) service, next to /send-text and /send-invoice.
+// Body: { phoneNumber, imageUrl, caption }  ->  sends the image with the caption under it.
+app.post('/send-image', async (req, res) => {
+  const { phoneNumber, imageUrl, caption } = req.body;
 
+  if (!isReady) {
+    return res.status(503).json({ success: false, message: 'WhatsApp not connected yet' });
+  }
+  if (!phoneNumber || !imageUrl) {
+    return res.status(400).json({ success: false, message: 'phoneNumber and imageUrl are required' });
+  }
+  if (!/^https?:\/\//i.test(String(imageUrl))) {
+    return res.status(400).json({ success: false, message: 'imageUrl must start with http:// or https://' });
+  }
+
+  const jid = toJid(phoneNumber);
+
+  try {
+    const [check] = await sock.onWhatsApp(jid);
+    if (!check?.exists) {
+      return res.status(400).json({ success: false, message: 'This number is not registered on WhatsApp' });
+    }
+
+    // Baileys downloads the image from the link itself.
+    await sock.sendMessage(jid, {
+      image: { url: String(imageUrl) },
+      caption: caption ? String(caption) : undefined
+    });
+
+    res.json({ success: true, message: 'Image sent successfully' });
+  } catch (err) {
+    console.error('Send image failed:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
 app.listen(PORT, () => {
   console.log(`WhatsApp invoice service (Baileys) running on port ${PORT}`);
 });
